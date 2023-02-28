@@ -338,7 +338,7 @@ def inittime():
             (year, month, day, hour, minute, second, wday, yday) = utime.localtime(
                 resp["unixtime"] + resp["raw_offset"])
             machine.mem32[rtc_base_mem + 4] = (year << 12) | (month << 8) | day
-            machine.mem32[rtc_base_mem + 8] = ((hour << 16) | (minute << 8) | second) | (((wday + 1) % 7) << 24)
+            machine.mem32[rtc_base_mem + 8] = ((hour << 16) | (minute << 8) | second) | ((wday % 7) << 24)
             machine.mem32[rtc_base_mem + atomic_bitmask_set + 0xc] = 0x10
         except:  # give up
             pass
