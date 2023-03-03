@@ -8,8 +8,7 @@ import json
 import urequests
 
 ########################## Configuration here
-ssidRouter     = '***********' #Enter the router name
-passwordRouter = '***********' #Enter the router password
+wifiAP = {"*******" : "********"} # dictionary of keys=access point name and value=password. Each combination is tried till a connection is achieved.
 TIME_URL = 'http://worldtimeapi.org/api/timezone/*********/*******'
 API_KEY = '***********' #create at openweathermap web site, then wait a couple hours for the key to become active
 LATITUDE = '***********' #grab from https://www.latlong.net
@@ -18,6 +17,9 @@ UNITS = 'metric' # or imperial
 ########################## End configuration
 
 WEATHER = 'http://api.openweathermap.org/data/2.5/weather?' + 'lat=' + LATITUDE + '&lon=' + LONGITUDE + '&units=' + UNITS + '&appid=' + API_KEY
+
+sensor_temp = ADC(4)
+conversion_factor = 3.3 / (65535)
 
 rtc_base_mem = 0x4005c000
 atomic_bitmask_set = 0x2000
@@ -303,19 +305,22 @@ class EPD_2in13(framebuf.FrameBuffer):
 
 # now onto the code itself
 
-def STA_Setup(ssidRouter, passwordRouter, sta_if):
+def STA_Setup(wifiDict, sta_if):
     if not sta_if.isconnected():
-        print('connecting to', ssidRouter)
-        sta_if.active(True)
-        sta_if.connect(ssidRouter, passwordRouter)
-        attempt = 0
-        while attempt < 15 and not sta_if.isconnected():
-            attempt += 1
-            print(str(attempt))
-            utime.sleep(1.0)
-        if sta_if.isconnected():
-            print('Connected, IP address:', sta_if.ifconfig())
-        else:
+        for ssidRouter, passwordRouter in wifiDict.items():
+            print('connecting to', ssidRouter)
+            sta_if.active(True)
+            sta_if.connect(ssidRouter, passwordRouter)
+            attempt = 0
+            while attempt < 15 and not sta_if.isconnected():
+                attempt += 1
+                print(str(attempt))
+                utime.sleep(1.0)
+            if sta_if.isconnected():
+                print('Connected, IP address:', sta_if.ifconfig())
+                break;
+
+        if not sta_if.isconnected():
             print('Could not connect')
     return sta_if
 
@@ -326,11 +331,20 @@ def init(epd):
     epd.fill_rect(50, 0, 2, 122, 0x00)
     epd.display(epd.buffer)
     epd.init(epd.part_update)
+    # when run from a computer, the time is set up to the computer's time
+    # when run alone, the time defaults to 2021/1/1
+    # to achieve consistency in both situations, time is forced to 2021/1/1 at first
+    # after achieving network connection, it will be updated correctly by an API call
+    (year, month, day, hour, minute, second, wday, yday) = (2021, 1, 1, 0, 0, 0, 1, 0)
+    machine.mem32[rtc_base_mem + 4] = (year << 12) | (month << 8) | day
+    machine.mem32[rtc_base_mem + 8] = ((hour << 16) | (minute << 8) | second) | (((wday + 1) % 7) << 24)
+    machine.mem32[rtc_base_mem + atomic_bitmask_set + 0xc] = 0x10
+    utime.sleep(1)  # needs a second for the internal clock to be updated
 
 
 def inittime():
     if not sta_if.isconnected():
-        STA_Setup(ssidRouter, passwordRouter, sta_if)
+        STA_Setup(wifiAP, sta_if)
     if sta_if.isconnected():
         try:
             resp = urequests.get(TIME_URL).json()
@@ -340,7 +354,7 @@ def inittime():
             machine.mem32[rtc_base_mem + 4] = (year << 12) | (month << 8) | day
             machine.mem32[rtc_base_mem + 8] = ((hour << 16) | (minute << 8) | second) | (((wday + 1) % 7) << 24)
             machine.mem32[rtc_base_mem + atomic_bitmask_set + 0xc] = 0x10
-            utime.sleep(1) # needs a second for the internal clock to be updated
+            utime.sleep(1)  # needs a second for the internal clock to be updated
         except:  # give up
             pass
 
@@ -413,13 +427,20 @@ def loop(sta_if, epd):
                 drawLine(epd, 22, 41, 10, t[3] / 12 + 0.015)
                 drawLine(epd, 22, 41, 10, t[3] / 12 - 0.015)
                 epd.displayPartial(epd.buffer)
+
+                reading = sensor_temp.read_u16() * conversion_factor
+                temp = round(27 - (reading - 0.706) / 0.001721, 1)
+                epd.fill_rect(54, 109, 196, 13, 0xff)
+                epd.text("Inside:" + str(temp) + "c", 56, 109, 0x00)
+                epd.displayPartial(epd.buffer)
+
         if h != lasth:
             if not sta_if.isconnected():
-                STA_Setup(ssidRouter, passwordRouter, sta_if)
+                STA_Setup(wifiAP, sta_if)
             if not sta_if.isconnected():
                 continue
             lasth = h
-            epd.fill_rect(54, 0, 196, 122, 0xff)
+            epd.fill_rect(54, 0, 196, 108, 0xff)
             try:
                 resp = urequests.get(WEATHER).json()
                 epd.text(resp["weather"][0]["description"], 56, 0, 0x00)
@@ -432,8 +453,8 @@ def loop(sta_if, epd):
                 epd.text("Feels: " + str(resp["main"]["feels_like"]) + "c", 56, 34, 0x00)
                 epd.text("Min:   " + str(resp["main"]["temp_min"]) + "c", 56, 49, 0x00)
                 epd.text("Max:   " + str(resp["main"]["temp_max"]) + "c", 56, 64, 0x00)
+                epd.text("Humidity: " + str(resp["main"]["humidity"]) + "%", 56, 79, 0x00)
                 epd.text("Pressure: " + str(resp["main"]["pressure"]) + "hPa", 56, 94, 0x00)
-                epd.text("Humidity: " + str(resp["main"]["humidity"]) + "%", 56, 109, 0x00)
             except:
                 # give up
                 pass
